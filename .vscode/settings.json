@@ -1,0 +1,19 @@
+{
+    "files.associations": {
+        "cstddef": "c",
+        "array": "c",
+        "functional": "c",
+        "tuple": "c",
+        "type_traits": "c",
+        "utility": "c",
+        "system_error": "c",
+        "lexer.h": "c",
+        "tokenizer.h": "c",
+        "sv.h": "c",
+        "utils.h": "c",
+        "dm.h": "c",
+        "vars.h": "c",
+        "da.h": "c",
+        "stdint.h": "c"
+    }
+}

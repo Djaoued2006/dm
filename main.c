@@ -1,659 +1,819 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <string.h>
-#include <stdbool.h>
+#include "./dm.h"
 
-/*
-    I'LL ADD A NEW FIELD IN THE OPERAND TYPE, isvalid
-    if (isvalid == false) => no operand expected
-    else 
-        more operands expected
+char indent = 0;
 
+void dm_get_address_from_label_name(Machine *dm, char *label_name, size_t *address) {
+    for (size_t i = 0; i < dm->Labels.count; i++) {
+        // GET THE LABEL
+        Label label = (Label) {0};
+        arr_get_item(&dm->Labels, &label, i);
+        if (strcmp(label.name, label_name) == 0) {
+            *address = label.address;
+            return;
+        }
+    }
+    dm->err = Label_Not_Found_Error;
+}
 
-    THE OPERAND VALUE CAN BE A WORD (ANY IMMEDIATE OR REG VALUE) 
-    OR A LABEL : {
-        NAME,
-        ADDRESS
+const char *inst_type_to_cstr(Inst_Type type) {
+    switch(type) {
+        case INST_PUSH:
+            return "INST_PUSH";
+        case INST_ADD:
+            return "INST_ADD";
+        case INST_SUB:
+            return "INST_SUB";
+        case INST_MUL:
+            return "INST_MUL";
+        case INST_DIV:
+            return "INST_DIV";
+        case INST_DUP:
+            return "INST_DUP";
+        case INST_JMP:
+            return "INST_JMP";
+        case INST_HALT:
+            return "INST_HALT";
+        case INST_CMP:
+            return "INST_CMP";
+        case INST_JE:
+            return "INST_JE";
+        case INST_JNE:
+            return "INST_JNE";
+        case INST_SYSCALL:  
+            return "INST_SYSCALL";
+        case INST_PUSH_STR:
+            return "INST_PUSH_STR";
+        case INST_DEC:
+            return "INST_DEC";
+        case INST_INC:
+            return "INST_INC";
+        case INST_POP:
+            return "INST_POP";
+        default:
+            assert(false && "Error: 'inst_type_to_cstr', type not implemented yet\n");
+    }
+}
+
+const char *machine_error_to_cstr(Machine_Error err) {
+    switch(err) {       
+        case No_Error:
+            return "No_Error";
+        case Stack_OverFlow_Error:
+            return "Stack_OverFlow_Error";
+        case Stack_UnderFlow_Error:
+            return "Stack_UnderFlow_Error";
+        case Division_By_Zero_Error:
+            return "Division_By_Zero_Error";
+        case Label_Not_Found_Error:
+            return "Label_Not_Found_Error";
+        case Syscall_Error:
+            return "Syscall_Error";
+        case Invalid_Memory_Location_Error:
+            return "Invalid_Memory_Location_Error";
+        default:
+            assert(false && "Error: 'machine_error_to_cstr', error not implemented yet\n");
+    }
+}
+
+int isstackempty(Machine *dm) {
+    return (dm->sp == 0);
+}
+int isstackfull(Machine *dm) {
+    return (dm->sp == STACK_CAPACITY);
+}
+
+void push(Machine *dm, Word value) {
+    dm->stack[dm->sp++] = value;
+}
+
+Word pop(Machine *dm) {
+    return dm->stack[--dm->sp];
+}
+
+void handle_push_inst(Machine *dm, Inst inst) {
+    if(isstackfull(dm)) {
+        dm->err = Stack_OverFlow_Error;
+        return;
+    }
+    push(dm, inst.operand.as_word);
+    dm->ip++;
+}
+
+void handle_arithmetic_inst(Machine *dm, Inst inst) {
+    switch(inst.type) {
+        case INST_ADD:
+            HANDLE_ARITHMETIC_INSTRUCTION(+);
+            break;
+        case INST_SUB:
+            HANDLE_ARITHMETIC_INSTRUCTION(-);
+            break;
+        case INST_MUL:
+            HANDLE_ARITHMETIC_INSTRUCTION(*);
+            break;
+        case INST_DIV:
+            HANDLE_ARITHMETIC_INSTRUCTION(/);
+            break;
+        default:    
+            assert(false && "ERROR: 'handle_arithmetic_inst' inst.type not found\n");
+    }
+    dm->ip++;
+}
+
+void handle_dup_inst(Machine *dm, Inst inst) {
+    (void)inst;
+
+    if (isstackfull(dm)) {
+        dm->err = Stack_OverFlow_Error;
+        return;
+    }
+    if (isstackempty(dm)) {
+        dm->err = Stack_UnderFlow_Error;
+        return;
+    }
+    if ((size_t) inst.operand.as_word > dm->sp) {
+        dm->err = Stack_UnderFlow_Error;
+        return;
     }
 
-    ADD LABEL INSTRUCTION WILL ADD A NEW LABEL IN THE LABELS IN THE MACHINE 
+    push(dm, dm->stack[dm->sp - inst.operand.as_word]);
+    dm->ip++;
+}
 
-*/
+void handle_jmp_inst(Machine *dm, Inst inst) {
+    size_t address = 0;
+    dm_get_address_from_label_name(dm, inst.operand.as_str, &address);
+    dm_handle_error(dm);
+    dm->ip = address;
+}
 
-#define STACK_CAPACITY 100
-#define RAM_CAPACITY 100
-#define PROG_CAPACITY 100
-#define LABELS_CAPACITY 100
-#define ARRAY_SIZE(arr) sizeof(arr) / sizeof((arr)[0])
-
-typedef uint16_t word;
-
-typedef enum {
-    AX = 0,
-    BX, 
-    CX, 
-    DX, 
-    SI, 
-    DI, 
-    BP, 
-    SP, 
-    PC, 
-    FLAGS,
-    REG_COUNT,
-} REG;
-
-char *REGS_NAME[REG_COUNT] = {
-    "AX",
-    "BX", 
-    "CX", 
-    "DX", 
-    "SI", 
-    "DI", 
-    "BP", 
-    "SP", 
-    "PC", 
-    "FLAGS",
-};
-
-typedef enum {
-    INST_MOVE = 0,  // MOV REG, IMM
-    INST_ADD,       // ADD REG, REG
-    INST_SUB,       // SUB REG, REG
-    INST_MUL,       // MUL REG, REG
-    INST_DIV,       // DIV REG, REG
-    INST_PUSH,      // PUSH REG
-    INST_POP,       // POP REG
-    INST_JUMP,      // JUMP LABEL
-    MAKE_LABEL,     // LABEL
-    INST_COUNT,
-} INST_TYPE;
-
-char *INST_TYPE_NAME[INST_COUNT] = {
-    "MOV", 
-    "ADD",       
-    "SUB",       
-    "MUL",       
-    "DIV",       
-    "PUSH",       
-    "POP",
-    "JMP",
-    "ADD_LAB",
-};
-
-typedef enum {
-    REGISTER = 0,
-    VARIABLE,
-    IMMEDIATE,
-    NO_TYPE,
-    LABEL_TYPE,
-    OPERAND_TYPE_COUNT,
-} OPERAND_TYPE;
-
-typedef struct {
-    char name[30];
-    word address;
-} LABEL;
-
-typedef union {
-    word value;
-    LABEL label;
-} OPERAND_VALUE;
-
-typedef struct {
-    OPERAND_TYPE type;
-    OPERAND_VALUE op_value;
-    bool isvalid;
-} OPERAND;
-
-typedef struct {
-    INST_TYPE type;
-    OPERAND ops[2];    // MAX NUMBER OF OPERANDS IS 2
-} INST;
-
-typedef struct {
-    word stack[STACK_CAPACITY];
-    word ram[RAM_CAPACITY];
-    word regs[REG_COUNT];
-
-    INST prog[PROG_CAPACITY];
-    size_t prog_size;
+void handle_halt_inst(Machine *dm, Inst inst) {
+    (void)inst;
+    dm->state = HALTED;
+}
 
 
-    LABEL labels[LABELS_CAPACITY];
-    size_t labels_size;
-} machine;
+void handle_cmp_inst(Machine *dm, Inst inst) {
+    (void)inst;
+    if (dm->sp < 2) {
+        dm->err = Stack_UnderFlow_Error;
+        return;
+    }
 
-machine dm = {0};
+    Word op1 = pop(dm);
+    Word op2 = pop(dm);
 
-// INITIALIZATION
-OPERAND operand_init(OPERAND_TYPE type, word value, bool isvalid);
-LABEL label_init(char *label_name, word address);
-INST inst_init(INST_TYPE type, OPERAND first_op, OPERAND second_op);
-void add_label(machine *dm, char *label_name, word address);
-OPERAND operand_label_init(char *name, word address);
+    push(dm, op1 == op2);
+    dm->ip++;
+}
 
-// GETTERS
-word get_operand_value(machine *dm, OPERAND op);
-int get_label(machine *dm, char *label_name);
+void handle_je_inst(Machine *dm, Inst inst) {
+    if (isstackempty(dm)) {
+        dm->err = Stack_OverFlow_Error;
+        return;
+    }
 
-// INSTRUCTIONS
-void handle_move_instruction(machine *dm, INST curr_inst);
-void handle_add_inst(machine *dm, INST curr_inst);
-void handle_sub_inst(machine *dm, INST curr_inst);
-void handle_mul_inst(machine *dm, INST curr_inst);
-void handle_div_inst(machine *dm, INST curr_inst);
-void handle_arithmetic_inst(machine *dm, INST curr_inst);
-void handle_push_inst(machine *dm, INST curr_inst);
-void handle_pop_inst(machine *dm, INST curr_inst);
-void handle_jump_inst(machine *dm, INST curr_inst);
+    Word top = pop(dm);
+    if(top == 0) {
+        dm->ip++;
+        return;
+    }
+    size_t address = 0;
+    dm_get_address_from_label_name(dm, inst.operand.as_str, &address);
+    dm_handle_error(dm);
+    dm->ip = address;
+}
 
-// DUMPING
-void dump_regs(machine *dm);
-void write_operand(OPERAND op);
-void write_inst(INST inst);
-void dump_stack(machine *dm);
-void print_program(machine *dm);
+void handle_jne_inst(Machine *dm, Inst inst) {
+    if (isstackempty(dm)) {
+        dm->err = Stack_OverFlow_Error;
+        return;
+    }
 
-void execute_inst(machine *dm) {
-    INST current_inst = dm->prog[dm->regs[PC]];
+    Word top = pop(dm);
+    if(top == 1) {
+        dm->ip++;
+        return;
+    }
 
-    // update the program counter:
-    dm->regs[PC]++;
+    size_t address = 0;
+    dm_get_address_from_label_name(dm, inst.operand.as_str, &address);
+    dm_handle_error(dm);
+    dm->ip = address;
+}
 
-    switch (current_inst.type) {
-        case INST_MOVE:
-            handle_move_instruction(dm, current_inst);
-            dump_regs(dm);
+
+// WRITE A SINGLE CHAR TO THE STDOUT
+void handle_write_syscall(Machine *dm) {
+    if (isstackempty(dm)) {
+        dm->err = Stack_UnderFlow_Error;
+        return;
+    }
+
+    char c = (char) pop(dm);
+    
+    fputc(c, dm->output_file);
+}
+
+// GET A SINGLE CHAR FROM THE STDIN
+void handle_read_syscall(Machine *dm) {    
+    if (isstackfull(dm)) {
+        dm->err = Stack_OverFlow_Error;
+        return;
+    }
+
+    char c = fgetc(stdout);
+
+    push(dm, c);
+}
+
+void handle_syscall(Machine *dm, Inst inst) {
+    (void)inst;
+
+    if (isstackempty(dm)) {
+        dm->err = Stack_UnderFlow_Error;
+        return;
+    }
+
+    Word call = pop(dm);
+
+    switch(call) {
+        case WRITE:
+            handle_write_syscall(dm);
             break;
-        case INST_ADD:
+        case READ:
+            handle_read_syscall(dm);
+            break;
+        default:
+            assert(false && "ERROR: 'handle_syscall', call not implemented yet\n");
+    }
+
+    dm->ip++;
+}
+
+void handle_push_str_inst(Machine *dm, Inst inst) {
+    char *str = inst.operand.as_str;
+    size_t length = strlen(str);
+
+    for (size_t i = 0; i < length; ++i) {
+        push(dm, (Word) str[length - 1 - i]);
+    }
+
+    dm->ip++;
+}
+
+void handle_inc_inst(Machine *dm, Inst inst) {
+    (void)inst;
+    if (isstackempty(dm)) {
+        dm->err = Stack_UnderFlow_Error;
+        return;
+    }
+
+    Word op = pop(dm);
+    op++;
+    push(dm, op);
+
+    dm->ip++;
+}
+void handle_dec_inst(Machine *dm, Inst inst) {
+    (void)inst;
+    if (isstackempty(dm)) {
+        dm->err = Stack_UnderFlow_Error;
+        return;
+    }
+
+    Word op = pop(dm);
+    op--;
+    push(dm, op);
+
+    dm->ip++;
+}
+void handle_pop_inst(Machine *dm, Inst inst) {
+    size_t op = (size_t) inst.operand.as_word; 
+    if (op > dm->sp) {
+        dm->err = Invalid_Memory_Location_Error;
+        return;
+    }
+
+    for (size_t i = dm->sp - op; i < dm->sp - 1; ++i) {
+        dm->stack[i] = dm->stack[i + 1];
+    }    
+
+    dm->sp--;
+    dm->ip++;
+}
+
+void print_inst(Machine *dm, Inst inst) {
+    fprintf(dm->debug_file, "%s\n", inst_type_to_cstr(inst.type));
+}
+
+void execute_instruction(Machine *dm, Inst inst) {
+    print_inst(dm, inst);
+    switch(inst.type) {
+        case INST_PUSH:
+            handle_push_inst(dm, inst);
+            break;
+        case INST_ADD: 
         case INST_SUB:
         case INST_MUL:
         case INST_DIV:
-            handle_arithmetic_inst(dm, current_inst);
-            dump_regs(dm);
+            handle_arithmetic_inst(dm, inst);
             break;
-        case INST_PUSH:
-            handle_push_inst(dm, current_inst);
+        case INST_DUP:
+            handle_dup_inst(dm, inst);
+            break;
+        case INST_JMP:
+            handle_jmp_inst(dm, inst);
+            break;
+        case INST_HALT:
+            handle_halt_inst(dm, inst);
+            break;
+        case INST_CMP:
+            handle_cmp_inst(dm, inst);
+            break;
+        case INST_JE:
+            handle_je_inst(dm, inst);
+            break;
+        case INST_JNE:
+            handle_jne_inst(dm, inst);
+            break;
+        case INST_SYSCALL:
+            handle_syscall(dm, inst);
+            break;
+        case INST_PUSH_STR:
+            handle_push_str_inst(dm, inst);
+            break;
+        case INST_INC:
+            handle_inc_inst(dm, inst);
+            break;
+        case INST_DEC:
+            handle_dec_inst(dm, inst);
             break;
         case INST_POP:
-            handle_pop_inst(dm, current_inst);
-            break;
-        case MAKE_LABEL:
-            add_label(dm, current_inst.ops[0].op_value.label.name, current_inst.ops[0].op_value.label.address);
-            break;
-        case INST_JUMP:
-            handle_jump_inst(dm, current_inst);
+            handle_pop_inst(dm, inst);
             break;
         default:
-            break;
+            assert(false && "Error: 'execute_instruction', instruction not implemented yet\n");
     }
 }
 
-INST prog[PROG_CAPACITY] = {0};
-size_t curr_size = 0;
-
-void push_inst(INST_TYPE type, OPERAND op1, OPERAND op2) {
-    prog[curr_size++] = inst_init(type, op1, op2);
+void dump_stack(Machine *dm) {
+    fprintf(dm->debug_file, "\tStack:\n");
+    for (size_t i = 0; i < dm->sp; ++i) {
+        fprintf(dm->debug_file, "\t\t%ld\t%c\n", dm->stack[i], (char)dm->stack[i]);
+    }
+    putchar('\n');
 }
 
-void make_prog() {
-    // INITIALIZING A TESTING PROGRAM
-    OPERAND op1 = {0};
-    OPERAND op2 = {0};
-
-    
-    op1 = operand_init(REGISTER, AX, true);
-    op2 = operand_init(IMMEDIATE, 0, true);
-    push_inst(INST_MOVE, op1, op2); // mov ax, 0
-
-    op1 = operand_init(REGISTER, BX, true);
-    op2 = operand_init(IMMEDIATE, 1, true);   
-    push_inst(INST_MOVE, op1, op2); // mov bx, 1
-    
-    op2.isvalid = false;
-    op1 = operand_label_init("loop", curr_size);
-    push_inst(MAKE_LABEL, op1, op2); // loop:
-
-    op1 = operand_init(REGISTER, CX, true);
-    op2 = operand_init(REGISTER, AX, true);
-    push_inst(INST_MOVE, op1, op2);  // mov cx, ax
-
-    op1 = operand_init(REGISTER, AX, true);
-    op2 = operand_init(REGISTER, BX, true);
-    push_inst(INST_ADD, op1, op2);  // add ax, bx
-    
-    
-    op1 = operand_init(REGISTER, BX, true);
-    op2 = operand_init(REGISTER, CX, true);
-    push_inst(INST_MOVE, op1, op2);  // mov bx, cx
-    
-    // op1 = operand_init(REGISTER, AX, true);
-    // op2 = operand_init(REGISTER, BX, true);
-    // push_inst(INST_DIV, op1, op2);
-    
-    // op1 = operand_init(REGISTER, AX, true);
-    // op2.isvalid = false;
-    // push_inst(INST_PUSH, op1, op2);
-    
-    
-
-    // op1 = operand_init(REGISTER, BX, true);
-    // push_inst(INST_PUSH, op1, op2);
-
-    // op1 = operand_init(REGISTER, CX, true);
-    // push_inst(INST_PUSH, op1, op2);
-
-    // op1 = operand_init(REGISTER, AX, true);
-    // push_inst(INST_POP, op1, op2);
-
-    op2.isvalid = false;
-    op1 = operand_label_init("loop", 0);
-    push_inst(INST_JUMP, op1, op2);   // jmp loop
+void dm_handle_error(Machine *dm) {
+    if (dm->err == No_Error) return;
+    fprintf(stderr, "\nERROR: %s\n\n", machine_error_to_cstr(dm->err));
+    exit(1);
 }
 
-void load_prog(machine *dm) {
-    // ITERATE OVER ALL THE INSTRUCITIONS IN THE prog AND PUT THEM IN dm->prog
-    for (size_t i = 0; i < curr_size; i++) 
-        dm->prog[i] = prog[i];
-    
-    // UPDATE THE PROGRAM SIZE TO BE THE CURR_SIZE
-    dm->prog_size = curr_size;
+void write_directive(Machine *dm, Directive dir) {
+    if (dir.type == LABEL_DEFINITION) {
+        fprintf(dm->asm_file, "\n%s:\n", dir.value.as_label.name);
+    } else {
+        assert(false && "ERROR: 'write_directive', dir.type not implemented yet\n");
+    }
 }
 
-void execute(machine *dm) {
+void handle_directive(Machine *dm, Directive dir) {
+    if (dir.type == LABEL_DEFINITION) {
+        // PUSH THE LABEL TO THE LABELS
+        arr_append(&dm->Labels, &dir.value.as_label);
+    } else 
+        assert(false && "ERROR: 'handle_directive' dir.type not implemented yet\n");
+}
+
+void execute_statement(Machine *dm, Prog_Statement statement) {
+    switch(statement.type) {
+        case INST_TYPE:
+            execute_instruction(dm, statement.value.as_inst);
+            break;
+        case DIRECTIVE_TYPE:
+            dm->ip++;
+            break;
+        default:
+            assert(false && "ERROR: 'execute_statement', statement.type not implemented yet\n");
+    }
+}
+
+void dump_labels(Machine *dm) {
+    fprintf(dm->debug_file, "Labels:\n");
+
+    for (size_t i = 0; i < dm->Labels.count; i++) {
+        Label label = {0};
+        arr_get_item(&dm->Labels, &label, i);
+        fprintf(stdout, "\tLabel Name: '%s', Label Address: %zu\n", label.name, label.address);
+    }
+    putchar('\n');
+}
+
+
+void execute(Machine *dm) {
     size_t count = 0;
-    size_t limit = curr_size * 20; // execution limit 
-    while (dm->regs[PC] < dm->prog_size) {
-        if (count == limit)
+    do {    
+        execute_statement(dm, dm->prog[dm->ip]);
+        if (dm->err != No_Error) {
+            dm_handle_error(dm);
             break;
-        count++;
-        write_inst(dm->prog[dm->regs[PC]]);
-        execute_inst(dm);
+        }
+        dump_stack(dm);
+        // dump_labels(dm);
+
+        // if (count == 30) break;
+        // count++;
+    } while (dm->state != HALTED);
+    (void)count;
+}
+
+Inst inst_word_init(Inst_Type type, Word operand) {
+    return (Inst) {
+        .type = type,
+        .operand.as_word = operand,
+    };
+}
+
+Inst inst_str_init(Inst_Type type, char *name) {
+    return (Inst) {
+        .type = type,
+        .operand.as_str = name,
+    };
+}
+
+Label label_init(char *name, size_t addr) {
+    return (Label) {
+        .name = name,
+        .address = addr,
+    };
+}
+
+Directive dir_init(Directive_Type type, Directive_Value value) {
+    return (Directive) {
+        .type = type,
+        .value = value,
+    };
+}
+
+Directive dir_label_init(Label label) {
+    return (Directive) {
+        .type = LABEL_DEFINITION,
+        .value.as_label = label,
+    };
+}
+
+Prog_Statement prog_statement_init(Statement_Type type, Statement_Value value) {
+    return (Prog_Statement) {
+        .type = type,
+        .value = value,
+    };
+}
+
+Machine dm;
+
+void write_instruction(Machine *dm, Inst inst) {
+    if (indent != 0)
+        putc(indent, dm->asm_file);
+
+    switch(inst.type) {
+        case INST_PUSH:
+            fprintf(dm->asm_file, "push %ld\n", inst.operand.as_word);
+            break;
+        case INST_DUP:
+            fprintf(dm->asm_file, "dup %zu\n", (size_t) inst.operand.as_word);
+            break; 
+        case INST_ADD:
+            fprintf(dm->asm_file, "add\n");
+            break; 
+        case INST_SUB:
+            fprintf(dm->asm_file, "sub\n");
+            break; 
+        case INST_MUL:
+            fprintf(dm->asm_file, "mul\n");
+            break; 
+        case INST_DIV:
+            fprintf(dm->asm_file, "div\n");
+            break;
+        case INST_JMP:
+            fprintf(dm->asm_file, "jmp %s\n", inst.operand.as_str);
+            break;
+        case INST_HALT:
+            fprintf(dm->asm_file, "halt\n");
+            break;
+        case INST_CMP:
+            fprintf(dm->asm_file, "cmp\n");
+            break;
+        case INST_JE:
+            fprintf(dm->asm_file, "je %s\n", inst.operand.as_str);
+            break;
+        case INST_JNE:
+            fprintf(dm->asm_file, "jne %s\n", inst.operand.as_str);
+            break;
+        case INST_SYSCALL:
+            fprintf(dm->asm_file, "syscall\n");
+            break;
+        case INST_PUSH_STR:
+            fprintf(dm->asm_file, "push_str '%s'\n", inst.operand.as_str);
+            break;
+        case INST_INC:
+            fprintf(dm->asm_file, "inc\n");
+            break;
+        case INST_DEC:
+            fprintf(dm->asm_file, "dec\n");
+            break;
+        case INST_POP:
+            fprintf(dm->asm_file, "pop %zu\n", (size_t) inst.operand.as_word);
+            break;
+        default:
+            assert(false && "ERROR: 'write_instruction', inst.type not implemented yet\n");
+            break;
     }
 }
 
-void machine_init(machine *dm) {
-    // MACHINE IS ALREADY INITIALIZED WITH ZERO
-    // ALL I HAVE TO DO IS TO LOAD THE PROGRAM
-    load_prog(dm);
+void dm_push_prog_statement(Machine *dm, Prog_Statement prog_statement) {
+    if (dm->prog_size == PROG_CAPACITY) 
+        assert(false && "ERROR: 'dm_push_prog_statement' can not push more statements\n");
+
+    if (prog_statement.type == DIRECTIVE_TYPE) {
+        indent = '\t';
+        handle_directive(dm, prog_statement.value.as_dir);
+    }
+
+    dm->prog[dm->prog_size++] = prog_statement;
 }
 
-int main(void) {
-    // ADD INSTRUCTIONS
-    make_prog();
+#define MAKE_INST_PUSH(value)           inst_word_init(INST_PUSH, value)
+#define MAKE_INST_ADD                   inst_word_init(INST_ADD, 0)
+#define MAKE_INST_SUB                   inst_word_init(INST_SUB, 0)
+#define MAKE_INST_MUL                   inst_word_init(INST_MUL, 0)
+#define MAKE_INST_DIV                   inst_word_init(INST_DIV, 0)
+#define MAKE_INST_DUP(offset)           inst_word_init(INST_DUP, offset)
+#define MAKE_INST_HALT                  inst_word_init(INST_HALT, 0)
+#define MAKE_INST_CMP                   inst_word_init(INST_CMP, 0)
+#define MAKE_INST_SYSCALL               inst_word_init(INST_SYSCALL, 0)
+#define MAKE_INST_DEC                   inst_word_init(INST_DEC, 0)
+#define MAKE_INST_INC                   inst_word_init(INST_INC, 0)
+#define MAKE_INST_POP(offset)           inst_word_init(INST_POP, offset)
 
-    // INITIALIZE THE MACHINE
-    machine_init(&dm);
+#define MAKE_INST_JMP(name)             inst_str_init(INST_JMP, name)
+#define MAKE_INST_JE(name)              inst_str_init(INST_JE, name)
+#define MAKE_INST_JNE(name)             inst_str_init(INST_JNE, name)
+#define MAKE_INST_PUSH_STR(str)         inst_str_init(INST_PUSH_STR, str)
 
-    // PRINT THE PROGRAM
-    print_program(&dm);
-    printf("\n");
+#define MAKE_LABEL(name)                dir_label_init(label_init(name, dm->prog_size))
 
-    // EXECUTE INSTRUCTIONS
-    execute(&dm);
 
-    // for (size_t i = 0; i < curr_size; i++) 
-    //     write_inst(prog[i]);
+#define PUSH_INST(inst)                                                 \
+    do {                                                                \
+        Statement_Value value;                                          \
+        value.as_inst = inst;                                           \
+        Statement_Type type = INST_TYPE;                                \
+        Prog_Statement statement = prog_statement_init(type, value);    \
+        dm_push_prog_statement(dm, statement);                          \
+    } while(0)
+
+#define PUSH_DIR(label)                                                 \
+    do {                                                                \
+        Statement_Value value;                                          \
+        value.as_dir = label;                                           \
+        Statement_Type type = DIRECTIVE_TYPE;                           \
+        Prog_Statement statement = prog_statement_init(type, value);    \
+        dm_push_prog_statement(dm, statement);                          \
+    } while(0)
+
+void fibo_prog(Machine *dm) {
+    PUSH_INST(MAKE_INST_JMP("main"));
+
+    PUSH_DIR(MAKE_LABEL("loop"));
+    PUSH_INST(MAKE_INST_DUP(1));
+    PUSH_INST(MAKE_INST_DUP(3));
+    PUSH_INST(MAKE_INST_ADD);
+    PUSH_INST(MAKE_INST_DUP(1));
+    PUSH_INST(MAKE_INST_PUSH(8));
+    PUSH_INST(MAKE_INST_CMP);
+    PUSH_INST(MAKE_INST_JE("break"));
+    PUSH_INST(MAKE_INST_JMP("loop"));
+
+    PUSH_DIR(MAKE_LABEL("main"));
+    PUSH_INST(MAKE_INST_PUSH(1));
+    PUSH_INST(MAKE_INST_PUSH(1));
+    PUSH_INST(MAKE_INST_JMP("loop"));
+
+    PUSH_DIR(MAKE_LABEL("break"));
+    PUSH_INST(MAKE_INST_HALT);
+}
+
+void write_string_prog(Machine *dm) {
+    PUSH_INST(MAKE_INST_JMP("main"));
+
+    PUSH_DIR(MAKE_LABEL("done"));
+    PUSH_INST(MAKE_INST_HALT);
+
+    PUSH_DIR(MAKE_LABEL("print"));
+    PUSH_INST(MAKE_INST_PUSH(0));
+    PUSH_INST(MAKE_INST_DUP(2));
+    PUSH_INST(MAKE_INST_CMP);
+    PUSH_INST(MAKE_INST_JE("done"));
+    PUSH_INST(MAKE_INST_DUP(2));
+    PUSH_INST(MAKE_INST_PUSH(WRITE));
+    PUSH_INST(MAKE_INST_SYSCALL);
+    PUSH_INST(MAKE_INST_DEC);
+    PUSH_INST(MAKE_INST_POP(2));
+    // PUSH_INST(MAKE_INST_HALT);
+    PUSH_INST(MAKE_INST_JMP("print"));
+
+    PUSH_DIR(MAKE_LABEL("main"));
+    PUSH_INST(MAKE_INST_PUSH_STR("ABCD"));
+    PUSH_INST(MAKE_INST_PUSH(4));          // push the string size
+    PUSH_INST(MAKE_INST_JMP("print"));
+}
+
+void read_string_prog(Machine *dm) {
+    PUSH_INST(MAKE_INST_JMP("main"));
+
+    PUSH_DIR(MAKE_LABEL("main"));
+    PUSH_INST(MAKE_INST_PUSH(4));      // pushing the string size
+    PUSH_INST(MAKE_INST_PUSH(READ));   // pushing the syscall type
+    PUSH_INST(MAKE_INST_SYSCALL);
+    PUSH_INST(MAKE_INST_HALT);
+}
+
+void prog_init(Machine *dm) {
+    write_string_prog(dm);
+}
+
+void dm_init(Machine *dm) {
+    dm->Labels = arr_init(sizeof(Label));
+    dm->err = No_Error;
+    dm->sp = 0;
+    dm->prog_size = 0;
+    dm->ip = 0;
+    dm->debug_file = stdout;
+
+    FILE *asm_file = fopen("./disasm.asm", "w");
+    FILE *out_file = fopen("./out.txt", "w");
+
+    dm->asm_file = asm_file;
+    dm->output_file = out_file;
+    // prog_init(dm);
+}
+
+void dm_clean(Machine *dm) {
+    free(dm->Labels.items);
+    fclose(dm->asm_file);
+    fclose(dm->output_file);
+}
+
+// return the token value if the current node has the type 'type' else raise error
+Token expect_token(Token_Node *current, Token_Type type) {
+    if (current == NULL) goto error;
+    if (current->token.type != type) goto error;
+    return current->token;
+
+error:
+    assert(false && "ERROR: 'expect_token' failed, expected token of type TYPE_GIVEN, but not found\n");
+}
+
+Inst_Type cstr_to_inst_type(char *cstr) {
+    for (size_t i = 0; i < ARR_SIZE(inst_set); ++i) {
+        if (isequal(cstr, inst_set[i])) {
+            return i;
+        }
+    }
+
+    assert("ERROR: 'cstr_to_inst_type' failed to get the instruction type\n");
     return 0;
 }
 
+void dm_parse_label_def(Machine *dm, Tokens tokens) {
+    char *value;
+    Token_Node *current = tokens;
 
+    Statement_Type st_type;
+    Statement_Value st_value;
 
-// INITIALIZE AN OPERAND OF TYPE != LABEL_TYPE
-OPERAND operand_init(OPERAND_TYPE type, word value, bool isvalid) {
-    return (OPERAND) {
-        .type = type,
-        .op_value.value = value,
-        .isvalid = isvalid,
-    };   
+    if (current->token.type == TT_LABEL) {
+        value = sv_to_cstr(&current->token.value);
+
+        st_type = DIRECTIVE_TYPE;
+        st_value.as_dir = MAKE_LABEL(value);
+        
+        current = current->next;
+
+        if (current != NULL) {
+            assert("ERROR: Expected no tokens but found more\n");
+        }
+    } else {
+        assert("Expected Label definition but else found\n");
+    }
+
+    dm_push_prog_statement(dm, prog_statement_init(st_type, st_value));
 }
 
-// INITIALIZE AN OPERAND OF TYPE == LABEL_TYPE
-OPERAND operand_label_init(char *name, word address) {
-    return (OPERAND) {
-        .type = LABEL_TYPE,
-        .op_value.label = label_init(name, address),
-        .isvalid = true,
-    };
-}
+void dm_parse_instruction(Machine *dm, Tokens tokens) {
+    char *value;
+    Token_Node *current = tokens;
 
-// INITIALIZE AN INSTRUCTION
-INST inst_init(INST_TYPE type, OPERAND first_op, OPERAND second_op) { 
-    return (INST) {
-        .type = type,
-        .ops[0] = first_op,
-        .ops[1] = second_op,
-    };
-}
+    Statement_Type st_type;
+    Statement_Value st_value;
 
-// GET THE OPERAND VALUE 
-// REGISTER -> REGISTER VALUE
-// VARIABLE -> VARIABLE VALUE
-// IMMEDIATE -> THE VALUE ITSELF
-// LABEL    -> ADDRESS
+    if(current->token.type == TT_INST) {
+        Inst inst;
+        
+        value = sv_to_cstr(&current->token.value);
+        
+        Inst_Type type = cstr_to_inst_type(value);
+        inst.type = type;
 
-word get_operand_value(machine *dm, OPERAND op) {
-    switch(op.type) {
-        case LABEL_TYPE:
-            // returning the label address
-            return get_label(dm, op.op_value.label.name);
-        case REGISTER:
-            // getting the reg value
-            return dm->regs[op.op_value.value]; 
-        case IMMEDIATE:
-            return op.op_value.value;
-        case VARIABLE:
-            // getting the variable value from the ram
-            return dm->ram[op.op_value.value];
-        default:
-            fprintf(stderr, "INVALID TYPE\n");
-            exit(1);
-            break;
-    }   
-}
+        current = current->next;
+        
+        if (inst_num_operands[type] == 1) {
+            Token token = expect_token(current, TT_OPERAND);
+            value = sv_to_cstr(&token.value);
 
-// SETS THE OPERAND VALUE 
-// REGISTER => REG VALUE 
-// VARIABLE => VARIABLE VALUE
-void set_operand(machine *dm, OPERAND op, word value) {
-    switch(op.type) {
-        case REGISTER:
-            dm->regs[op.op_value.value] = value;
-            break;
-        case VARIABLE:
-            dm->ram[op.op_value.value] = value;
-            break;
-        default:
-            fprintf(stderr, "INVALID OPERAND TYPE\n");
-            exit(1);
-    }
-}
+            if (inst_op_type[type] == STRING_TYPE) {
+                inst.operand.as_str = value;
+            } else {
+                inst.operand.as_word = atoll(value);
+            }
+        }
 
-void handle_move_instruction(machine *dm, INST curr_inst) {
-    // getting the operands
-    OPERAND op1 = curr_inst.ops[0];
-    OPERAND op2 = curr_inst.ops[1];
-
-    if (!op1.isvalid || !op2.isvalid) {
-        fprintf(stderr, "MORE OPERANDS EXPECTED\n");
-        exit(1);
-    }
-
-    // invalid operand type (for the first operand)
-    if (op1.type == IMMEDIATE) {
-        fprintf(stderr, "INVALID FIRST OPERAND, FOUND IMMEDIATE, EXPECTED OTHERS\n");
-        exit(1);
-    }
-
-    word op2_value = get_operand_value(dm, op2);
-
-    // making the move instruction
-    set_operand(dm, op1, op2_value);
-}
-
-void handle_add_inst(machine *dm, INST curr_inst) {
-    // getting the operands
-    OPERAND op1 = curr_inst.ops[0];
-    OPERAND op2 = curr_inst.ops[1];
-
-    if (!op1.isvalid || !op2.isvalid) {
-        fprintf(stderr, "MORE OPERANDS EXPECTED\n");
-        exit(1);
-    }
-
-    // invalid operand type (for the first operand)
-    if (op1.type == IMMEDIATE) {
-        fprintf(stderr, "INVALID FIRST OPERAND, FOUND IMMEDIATE, EXPECTED OTHERS\n");
-        exit(1);
-    }
-
-    word op1_value = get_operand_value(dm, op1);
-    word op2_value = get_operand_value(dm, op2);
-
-    word result = op1_value + op2_value;
-
-    set_operand(dm, op1, result);
-}
-
-
-void handle_sub_inst(machine *dm, INST curr_inst) {
-    // getting the operands
-    OPERAND op1 = curr_inst.ops[0];
-    OPERAND op2 = curr_inst.ops[1];
-
-    if (!op1.isvalid || !op2.isvalid) {
-        fprintf(stderr, "MORE OPERANDS EXPECTED\n");
-        exit(1);
-    }
-
-    // invalid operand type (for the first operand)
-    if (op1.type == IMMEDIATE) {
-        fprintf(stderr, "INVALID FIRST OPERAND, FOUND IMMEDIATE, EXPECTED OTHERS\n");
-        exit(1);
-    }
-
-    word op1_value = get_operand_value(dm, op1);
-    word op2_value = get_operand_value(dm, op2);
-
-    word result = op1_value - op2_value;
-
-    set_operand(dm, op1, result);
-}
-
-void handle_mul_inst(machine *dm, INST curr_inst) {
-    // getting the operands
-    OPERAND op1 = curr_inst.ops[0];
-    OPERAND op2 = curr_inst.ops[1];
-
-    if (!op1.isvalid || !op2.isvalid) {
-        fprintf(stderr, "MORE OPERANDS EXPECTED\n");
-        exit(1);
-    }
-
-    // invalid operand type (for the first operand)
-    if (op1.type == IMMEDIATE) {
-        fprintf(stderr, "INVALID FIRST OPERAND, FOUND IMMEDIATE, EXPECTED OTHERS\n");
-        exit(1);
-    }
-
-    word op1_value = get_operand_value(dm, op1);
-    word op2_value = get_operand_value(dm, op2);
-
-    word result = op1_value * op2_value;
-
-    set_operand(dm, op1, result);
-}
-
-
-void handle_div_inst(machine *dm, INST curr_inst) {
-    // getting the operands
-    OPERAND op1 = curr_inst.ops[0];
-    OPERAND op2 = curr_inst.ops[1];
-
-    if (!op1.isvalid || !op2.isvalid) {
-        fprintf(stderr, "MORE OPERANDS EXPECTED\n");
-        exit(1);
-    }
-
-    // invalid operand type (for the first operand)
-    if (op1.type == IMMEDIATE) {
-        fprintf(stderr, "INVALID FIRST OPERAND, FOUND IMMEDIATE, EXPECTED OTHERS\n");
-        exit(1);
-    }
-
-    word op1_value = get_operand_value(dm, op1);
-    word op2_value = get_operand_value(dm, op2);
-
-    if (op2_value == 0) {
-        fprintf(stderr, "DIVISION BY ZERO ISN'T ALLOWED\n");
-        exit(1);
-    }
-
-    word result = op1_value / op2_value;
-
-    set_operand(dm, op1, result);
-}
-
-void handle_arithmetic_inst(machine *dm, INST curr_inst) {
-    switch (curr_inst.type) {
-        case INST_ADD:
-            handle_add_inst(dm, curr_inst);
-            break;
-        case INST_SUB: 
-            handle_sub_inst(dm, curr_inst);
-            break;
-        case INST_MUL:
-            handle_mul_inst(dm, curr_inst);
-            break;
-        case INST_DIV:
-            handle_div_inst(dm, curr_inst);
-            break;
-        default:
-            break;
-    }
-}
-
-void handle_push_inst(machine *dm, INST curr_inst) {
-    if (dm->regs[SP] == STACK_CAPACITY) {
-        fprintf(stderr, "CAN NOT EXECUTE THE PUSH INSTRUCTION, STACK OVERFLOW ERROR\n");
-        exit(1);
-    }
-
-    OPERAND op = curr_inst.ops[0];
-    
-    if (!op.isvalid) {
-        fprintf(stderr, "NO OPERAND TO PUSH\n");
-        exit(1);
-    }
-
-    word operand_value = get_operand_value(dm, op);
-    dm->stack[dm->regs[SP]++] = operand_value;
-    dump_stack(dm);             // for testing purposes!
-} 
-
-void handle_pop_inst(machine *dm, INST curr_inst) {
-    if (dm->regs[SP] == 0) {
-        fprintf(stderr, "CAN NOT EXECUTE THE POP INSTRUCTION, STACK UNDERFLOW ERROR\n");
-        exit(1);
-    }
-
-    OPERAND op = curr_inst.ops[0];
-    
-    if (!op.isvalid) {
-        fprintf(stderr, "NO OPERAND TO POP\n");
-        exit(1);
-    }
-
-    if (op.type == IMMEDIATE) {
-        fprintf(stderr, "INVALID FIRST OPERAND, FOUND IMMEDIATE, EXPECTED OTHERS\n");
-        exit(1);
-    }
-
-    word poped_value = dm->stack[dm->regs[SP]--];
-    set_operand(dm, op, poped_value);
-    dump_stack(dm);             // for testing purposes!
-} 
-
-LABEL label_init(char *label_name, word address) {
-    LABEL result;
-
-    // COPY THE LABEL NAME
-    for (size_t i = 0; i < 30; i++) {
-        if (*label_name == '\0')
-            break;
-        result.name[i] = *label_name;
-        label_name++;
-    }
-
-    result.address = address;
-
-    return result;
-}
-
-// ADD LABEL TO THE MACHINE LABELS ARRAY
-void add_label(machine *dm, char *label_name, word address) {
-    if (dm->labels_size == LABELS_CAPACITY) {
-        fprintf(stderr, "CAN NOT ADD A NEW LABEL\n");
-        exit(1);
-    }
-
-    dm->labels[dm->labels_size++] = label_init(label_name, address);
-}
-
-// return -1 if the label isn't found
-int get_label(machine *dm, char *label_name) {
-    for (size_t i = 0; i < dm->labels_size; i++) {
-        if (strcmp(dm->labels[i].name, label_name) == 0)
-            return dm->labels[i].address;
-    }
-    return -1;
-}
-
-void handle_jump_inst(machine *dm, INST curr_inst) {
-    if (dm->labels_size == 0) {
-        fprintf(stderr, "NO LABELS PROVIDED\n");
-        exit(1);
-    } 
-
-    OPERAND op = curr_inst.ops[0];
-    int addr = get_label(dm, op.op_value.label.name);
-
-    if (addr == -1) {
-        fprintf(stderr, "LABEL %s IS NOT FOUND\n", op.op_value.label.name);
-        exit(1);
-    }
-
-    dm->regs[PC] = addr + 1; // jump to the instruction after the add label instruction
-}
-
-void dump_regs(machine *dm) {
-    printf("REGISTERS:\n");
-    for (size_t i = 0; i < REG_COUNT; i++) 
-        printf("\t%s: %d\n", REGS_NAME[i], dm->regs[i]);
-    printf("\n");
-}
-
-void write_operand(OPERAND op) {
-    switch (op.type) {
-        case LABEL_TYPE:
-            printf("%s", op.op_value.label.name);
-            break;
-        case REGISTER:
-            printf("%s", REGS_NAME[op.op_value.value]);
-            break;
-        default:
-            printf("%d", op.op_value.value);
-            break;
-    }
-}
-
-void write_inst(INST inst) {
-    printf("%s ", INST_TYPE_NAME[inst.type]);
-
-    if (inst.ops[0].isvalid) {
-        write_operand(inst.ops[0]);
-    }
-
-    if (inst.ops[1].isvalid) {
-        printf(", ");
-        write_operand(inst.ops[1]);
+        st_type = INST_TYPE;
+        st_value.as_inst = inst;
+    } else {
+        assert("Expected an instruction but else found\n");
     }
     
-    printf("\n");
+    dm_push_prog_statement(dm, prog_statement_init(st_type, st_value));
 }
 
-void dump_stack(machine *dm) {
-    size_t i;
-    printf("STACK:\n");
-    for (i = dm->regs[SP]; i > 0; i--) {
-        printf("\t%d\n", dm->stack[i - 1]);
-    }
-    printf("\n");
+void dm_assemble_line(Machine *dm, Tokens tokens) {
+    if (tokens == NULL) return;
+    if (tokens->token.type == TT_LABEL) dm_parse_label_def(dm, tokens);
+    else if (tokens->token.type == TT_INST) dm_parse_instruction(dm, tokens);
+    else 
+        assert("Expected an instruction or a label definition but else found\n");
 }
 
-void print_program(machine *dm) {
-    for (size_t i = 0; i < dm->prog_size; i++) {
-        write_inst(dm->prog[i]);
+void free_tokens(Tokens tokens) {
+    Token_Node *current = tokens;
+    while (current) {
+        Token_Node *next = current->next;
+        free(current);
+        current = next;
     }
+}
+
+void free_lines(Lines lines) {
+    Line_Node *current = lines;
+    while (current) {
+        Line_Node *next = current->next;
+        free_tokens(current->tokens);
+        free(current);
+        current = next;
+    }
+}
+
+void dm_assemble(Machine *dm, const char *filename) {
+    char *file_content = fcontent(filename);
+
+    Lexer lexer = lexer_init(file_content);
+    Lines lines = lex(&lexer);
+    Line_Node *line = lines;
+
+    while (line) {
+        dm_assemble_line(dm, line->tokens);
+        line = line->next;
+    }
+
+    free_lines(lines);
+}
+
+void write_statement(Machine *dm, size_t index) {
+    Prog_Statement statement = dm->prog[index];
+    switch(statement.type) {
+        case INST_TYPE:
+            write_instruction(dm, statement.value.as_inst);
+            break;
+        case DIRECTIVE_TYPE:
+            write_directive(dm, statement.value.as_dir);
+            break;
+    }
+}
+
+void dm_write_prog(Machine *dm) {
+    for (size_t i = 0; i < dm->prog_size; ++i) {
+        write_statement(dm, i);
+    }
+}
+
+int main(void) {
+    const char *filename = "./main.asm";
+    dm_init(&dm);
+    dm_assemble(&dm, filename);
+    // execute(&dm);
+    dm_write_prog(&dm);
+    dm_clean(&dm);
+    return 0;
 }
