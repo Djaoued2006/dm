@@ -34,6 +34,10 @@ static char *inst_set[] = {
     "dec",
     "inc",
     "pop",    
+    "jl",
+    "jg",
+    "jle",
+    "jge",
 };
 
 #endif

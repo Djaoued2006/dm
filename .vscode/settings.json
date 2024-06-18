@@ -14,6 +14,8 @@
         "dm.h": "c",
         "vars.h": "c",
         "da.h": "c",
-        "stdint.h": "c"
+        "stdint.h": "c",
+        "typeindex": "c",
+        "typeinfo": "c"
     }
 }
