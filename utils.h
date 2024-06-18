@@ -40,4 +40,11 @@ static char *inst_set[] = {
     "jge",
 };
 
+static char *regs_str[] = {
+    "rax",
+    "rbx",
+    "rcx",
+    "rdx",
+};
+
 #endif

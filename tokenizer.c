@@ -23,8 +23,16 @@ int is_inst(char *str) {
     return 0;
 }
 
+int is_reg(char *str) {
+    for (size_t i = 0; i < ARR_SIZE(regs_str); ++i) {
+        if (isequal(str, regs_str[i])) return 1;
+    }
+    return 0;
+}
+
 Token_Type get_token_type(char *str) {
     if (is_inst(str)) return TT_INST;
+    if (is_reg(str)) return TT_REG;
     return TT_OPERAND;
 }
 

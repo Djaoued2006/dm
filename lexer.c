@@ -58,7 +58,7 @@ Line_Node *tokenize_line(View *line) {
 
         char *value = sv_to_cstr(&token->token.value);
 
-        printf("value: %s, type: %d\n", value, token->token.type);
+        printf("value: %s, type: %s\n", value, token_types[token->token.type]);
 
         free(value);
 

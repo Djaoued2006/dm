@@ -16,6 +16,7 @@
         "da.h": "c",
         "stdint.h": "c",
         "typeindex": "c",
-        "typeinfo": "c"
+        "typeinfo": "c",
+        "asm.h": "c"
     }
 }

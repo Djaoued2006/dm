@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "../da.h"
+#include "../utils.h"
 
 #define STACK_CAPACITY 100
 #define PROG_CAPACITY 100
@@ -70,8 +71,8 @@ static int inst_num_operands[] = {
     1,
     0,
     1,
-    0,
-    0,
+    1,
+    1,
     1,
     1,
     1,
@@ -83,11 +84,13 @@ typedef enum {
     NO_TYPE = 0,
     STRING_TYPE,
     WORD_TYPE,
+    REG_TYPE,
+    WORD_REG_TYPE,
 } Operand_Type;
 
 static Operand_Type inst_op_type[] = {
-    WORD_TYPE, 
-    WORD_TYPE, 
+    WORD_REG_TYPE, 
+    WORD_REG_TYPE, 
     NO_TYPE, 
     NO_TYPE, 
     NO_TYPE,
@@ -99,9 +102,9 @@ static Operand_Type inst_op_type[] = {
     STRING_TYPE, 
     NO_TYPE, 
     STRING_TYPE, 
-    NO_TYPE, 
-    NO_TYPE, 
-    WORD_TYPE,
+    REG_TYPE, 
+    REG_TYPE, 
+    WORD_REG_TYPE,
     STRING_TYPE, 
     STRING_TYPE, 
     STRING_TYPE,
@@ -113,14 +116,31 @@ typedef enum {
     READ,
 } Syscall_Type;
 
+typedef enum {
+    RAX = 0, 
+    RBX,
+    RCX,
+    RDX,
+    REGS_COUNT,
+} Register;
+
+
+typedef enum {
+    WORD, 
+    STR, 
+    REG,
+} Inst_Value_Type;
+
 typedef union {
     Word as_word;
     char *as_str;
+    size_t as_reg;
 } Inst_Value;
 
 typedef struct {
     Inst_Type type;
     Inst_Value operand;
+    Inst_Value_Type val_type;
 } Inst;
 
 typedef struct {
@@ -171,14 +191,6 @@ typedef enum {
     HALTED,
 } Machine_State;
 
-typedef enum {
-    RAX = 0, 
-    RBX,
-    RCX,
-    RDX,
-    REGS_COUNT,
-} Registers;
-
 typedef struct {
     Word stack[STACK_CAPACITY];
     size_t sp;
@@ -216,7 +228,6 @@ typedef struct {
         Prog_Statement statement = prog_statement_init(type, value);    \
         dm_push_prog_statement(dm, statement);                          \
     } while(0)
-
 
 static const char *inst_type_to_cstr(Inst_Type type) {
     switch(type) {

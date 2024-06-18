@@ -35,6 +35,18 @@ error:
     assert(false && "ERROR: 'expect_token' failed, expected token of type TYPE_GIVEN, but not found\n");
 }
 
+
+Register cstr_to_reg_type(char *cstr) {
+    for (size_t i = 0; i < ARR_SIZE(regs_str); ++i) {
+        if (isequal(cstr, regs_str[i])) {
+            return i;
+        }
+    }
+
+    assert("ERROR: 'cstr_to_reg_type' failed to get the regsiter type\n");
+    return 0;
+}
+
 Inst_Type cstr_to_inst_type(char *cstr) {
     for (size_t i = 0; i < ARR_SIZE(inst_set); ++i) {
         if (isequal(cstr, inst_set[i])) {
@@ -64,12 +76,27 @@ void dm_parse_instruction(Machine *dm, Tokens tokens) {
         current = current->next;
         
         if (inst_num_operands[type] == 1) {
-            Token token = expect_token(current, TT_OPERAND);
+            Token token = current->token;
             value = sv_to_cstr(&token.value);
 
             if (inst_op_type[type] == STRING_TYPE) {
+                inst.val_type = STR;
                 inst.operand.as_str = value;
-            } else {
+            } else if (inst_op_type[type] == WORD_REG_TYPE) {
+                if (token.type == TT_REG) {
+                    inst.val_type = REG;
+                    inst.operand.as_reg = cstr_to_reg_type(value);
+                } else if (token.type == TT_OPERAND) {
+                    inst.val_type = WORD;
+                    inst.operand.as_word = atoll(value);
+                } else {
+                    assert("ERROR: 'dm_parse_instruction' failed to parse operand, expected reg or word type but else found\n");
+                }
+            } else if (inst_op_type[type] == REG_TYPE) {
+                inst.val_type = REG;
+                inst.operand.as_reg = cstr_to_reg_type(value);
+            } else if (inst_op_type[type] == WORD_TYPE) {
+                inst.val_type = WORD;
                 inst.operand.as_word = atoll(value);
             }
         }

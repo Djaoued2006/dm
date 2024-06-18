@@ -35,7 +35,13 @@ void handle_push_inst(Machine *dm, Inst inst) {
         dm->err = Stack_OverFlow_Error;
         return;
     }
-    push(dm, inst.operand.as_word);
+
+    if (inst.val_type == REG) {
+        push(dm, dm->regs[inst.operand.as_reg]);
+    } else {
+        push(dm, inst.operand.as_word);
+    }
+
     dm->ip++;
 }
 
@@ -113,10 +119,11 @@ void handle_je_inst(Machine *dm, Inst inst) {
     }
 
     Word top = pop(dm);
-    if(top == 0) {
+    if (top != 0) {
         dm->ip++;
         return;
     }
+
     size_t address = 0;
     dm_get_address_from_label_name(dm, inst.operand.as_str, &address);
     dm_handle_error(dm);
@@ -130,11 +137,11 @@ void handle_jne_inst(Machine *dm, Inst inst) {
     }
 
     Word top = pop(dm);
-    if(top == 1) {
+    if (top == 0) {
         dm->ip++;
         return;
     }
-
+    
     size_t address = 0;
     dm_get_address_from_label_name(dm, inst.operand.as_str, &address);
     dm_handle_error(dm);
@@ -160,8 +167,8 @@ void handle_read_syscall(Machine *dm) {
         dm->err = Stack_OverFlow_Error;
         return;
     }
-
-    char c = fgetc(stdout);
+    
+    char c = getchar();
 
     push(dm, c);
 }
@@ -202,43 +209,27 @@ void handle_push_str_inst(Machine *dm, Inst inst) {
 }
 
 void handle_inc_inst(Machine *dm, Inst inst) {
-    (void)inst;
-    if (isstackempty(dm)) {
-        dm->err = Stack_UnderFlow_Error;
-        return;
+    if (inst.val_type == REG) {
+        dm->regs[inst.operand.as_reg]++;
     }
-
-    Word op = pop(dm);
-    op++;
-    push(dm, op);
-
+    
     dm->ip++;
 }
 void handle_dec_inst(Machine *dm, Inst inst) {
-    (void)inst;
-    if (isstackempty(dm)) {
-        dm->err = Stack_UnderFlow_Error;
-        return;
+    if (inst.val_type == REG) {
+        dm->regs[inst.operand.as_reg]--;
     }
-
-    Word op = pop(dm);
-    op--;
-    push(dm, op);
 
     dm->ip++;
 }
 void handle_pop_inst(Machine *dm, Inst inst) {
-    size_t op = (size_t) inst.operand.as_word; 
-    if (op > dm->sp) {
-        dm->err = Invalid_Memory_Location_Error;
+    if (dm->sp < 1) {
+        dm->err = Stack_UnderFlow_Error;
         return;
     }
 
-    for (size_t i = dm->sp - op; i < dm->sp - 1; ++i) {
-        dm->stack[i] = dm->stack[i + 1];
-    }    
+    dm->regs[inst.operand.as_reg] = pop(dm);
 
-    dm->sp--;
     dm->ip++;
 }
 
@@ -315,7 +306,15 @@ void handle_jge_inst(Machine *dm, Inst inst){
 }
 
 void print_inst(Machine *dm, Inst inst) {
-    fprintf(dm->debug_file, "%s\n", inst_type_to_cstr(inst.type));
+    fprintf(stdout, "%s ", inst_set[inst.type]);
+    if (inst_num_operands[inst.type] == 1)
+        if (inst.val_type == REG) 
+            fprintf(stdout, "%s", regs_str[inst.operand.as_reg]);
+        else if (inst.val_type == STR) 
+            fprintf(stdout, "%s", inst.operand.as_str);
+        else fprintf(stdout, "%zu", inst.operand.as_word);
+        
+    fprintf(stdout, "\n");
 }
 
 void execute_instruction(Machine *dm, Inst inst) {
@@ -455,7 +454,11 @@ void dm_execute(Machine *dm) {
 void write_instruction(Machine *dm, Inst inst) {
     if (indent != 0)
         putc(indent, dm->asm_file);
+    
+    fprintf(dm->asm_file, "%s\n", inst_set[inst.type]);
 
+    return;
+    
     switch(inst.type) {
         case INST_PUSH:
             fprintf(dm->asm_file, "push %ld\n", inst.operand.as_word);
