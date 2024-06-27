@@ -1,6 +1,5 @@
-CFLAGS=-Wall -Wextra -g -pedantic
-main: *.c
-	$(CC) $(CFLAGS) *.c -o main
+main: main.c
+	cc main.c -o main -g
 
 clean:
 	rm -f main
